@@ -50,10 +50,6 @@ var _listen_timer: Timer
 var _known_rooms: Dictionary = {} # ip -> {name, port, last_seen}
 var _room_lost_timer: Timer
 
-# ----------------------------------------------------------------------
-# Lifecycle
-# ----------------------------------------------------------------------
-
 func _ready() -> void:
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -87,11 +83,6 @@ func _exit_tree() -> void:
 	stop_joining()
 	_stop_discovery()
 
-# ----------------------------------------------------------------------
-# Host API
-# ----------------------------------------------------------------------
-
-## Start hosting a room on the local network. Returns true if server bound successfully.
 func start_hosting(p_room_name: String, p_player_name: String) -> bool:
 	if role != Role.NONE:
 		push_warning("[NetworkManager] start_hosting called while role is %s" % role)
@@ -109,7 +100,7 @@ func start_hosting(p_room_name: String, p_player_name: String) -> bool:
 
 	multiplayer.multiplayer_peer = _server_peer
 	role = Role.HOST
-	my_peer_id = 1 # server is always peer 1 in ENet
+	my_peer_id = 1
 	connected_peers[my_peer_id] = my_player_name
 
 	_broadcast_timer.start()
@@ -127,21 +118,15 @@ func stop_hosting() -> void:
 	multiplayer.multiplayer_peer = null
 	role = Role.NONE
 	connected_peers.clear()
-	host_migrated.emit() # treat stop as migration for UI
+	host_migrated.emit()
 	print("[NetworkManager] Stopped hosting")
 
-# ----------------------------------------------------------------------
-# Client API
-# ----------------------------------------------------------------------
-
-## Begin listening for room broadcasts. Rooms surface via `room_discovered`.
 func start_room_discovery() -> void:
 	_stop_discovery()
 	var err := _discovery_socket.bind(DISCOVERY_PORT)
 	if err != OK and err != ERR_ALREADY_IN_USE:
 		push_warning("[NetworkManager] Discovery bind failed: %d" % err)
 		return
-	# ERR_ALREADY_IN_USE means another process is already listening; we can still receive.
 	_listen_timer.start()
 	_room_lost_timer.start()
 	print("[NetworkManager] Room discovery started on UDP %d" % DISCOVERY_PORT)
@@ -158,7 +143,6 @@ func _stop_discovery() -> void:
 		_discovery_socket.close()
 	_known_rooms.clear()
 
-## Connect to a host. Returns true if the connection attempt was launched.
 func join_room(host_ip: String, p_player_name: String) -> bool:
 	if role != Role.NONE:
 		return false
@@ -192,27 +176,18 @@ func stop_joining() -> void:
 	connected_peers.clear()
 	print("[NetworkManager] Stopped joining")
 
-# ----------------------------------------------------------------------
-# Game messaging
-# ----------------------------------------------------------------------
-
-## Send a typed game message. If `target_peer` is 0, the message is broadcast to
-## everyone (host only). Host → client (or vice versa) uses the standard RPC path.
 func send_game_message(type: String, payload: Dictionary, target_peer: int = 0) -> void:
 	var msg := {"type": type, "payload": payload, "from": my_peer_id}
 	if role == Role.HOST:
 		if target_peer == 0:
-			# Broadcast to all clients
 			for peer_id in connected_peers.keys():
 				if peer_id == my_peer_id:
 					continue
 				_send_rpc_to(peer_id, msg)
-			# Echo to ourselves so server-side game logic reacts the same way
 			game_message_received.emit(my_peer_id, type, payload)
 		else:
 			_send_rpc_to(target_peer, msg)
 	else:
-		# Client always sends to host (peer 1)
 		_send_rpc_to(1, msg)
 
 func _send_rpc_to(target_peer: int, msg: Dictionary) -> void:
@@ -224,14 +199,11 @@ func _receive_game_message(msg: Dictionary) -> void:
 	var t: String = str(msg.get("type", ""))
 	var payload: Dictionary = msg.get("payload", {})
 	if role == Role.HOST:
-		# First time we hear from this peer, capture their name
 		if not connected_peers.has(sender):
 			connected_peers[sender] = "Player %d" % sender
-			# Notify everyone of the new player list
 			broadcast_player_list()
 	game_message_received.emit(sender, t, payload)
 
-## Host-only: push the current player list (peer_id -> name) to all clients.
 func broadcast_player_list() -> void:
 	if role != Role.HOST:
 		return
@@ -248,16 +220,10 @@ func _receive_player_list(list: Dictionary) -> void:
 	connected_peers = list
 	print("[NetworkManager] Player list updated: %s" % str(connected_peers))
 
-# ----------------------------------------------------------------------
-# Multiplayer signal handlers
-# ----------------------------------------------------------------------
-
 func _on_peer_connected(peer_id: int) -> void:
 	print("[NetworkManager] Peer connected: %d" % peer_id)
 	if role == Role.HOST:
-		# Default name until the client tells us their real name
 		connected_peers[peer_id] = "Player %d" % peer_id
-		# Send the room name to the new client
 		rpc_id(peer_id, "_receive_room_info", {"name": room_name, "you": peer_id})
 		broadcast_player_list()
 		peer_joined.emit(peer_id, connected_peers[peer_id])
@@ -273,7 +239,6 @@ func _on_connected_to_server() -> void:
 	my_peer_id = multiplayer.get_unique_id()
 	connected_peers[1] = "Host"
 	connected_peers[my_peer_id] = my_player_name
-	# Tell the host our name
 	rpc_id(1, "_receive_player_list", {my_peer_id: my_player_name})
 	join_succeeded.emit(my_peer_id)
 
@@ -284,7 +249,7 @@ func _on_connection_failed() -> void:
 		_client_peer = null
 	multiplayer.multiplayer_peer = null
 	join_failed.emit("Connection failed — host not reachable")
-	start_room_discovery() # resume scanning
+	start_room_discovery()
 
 func _on_server_disconnected() -> void:
 	print("[NetworkManager] Server disconnected")
@@ -296,12 +261,7 @@ func _on_server_disconnected() -> void:
 	multiplayer.multiplayer_peer = null
 	connection_lost.emit()
 
-# ----------------------------------------------------------------------
-# Discovery protocol (UDP broadcast)
-# ----------------------------------------------------------------------
-
 func _on_broadcast_tick() -> void:
-	# Server announces itself
 	if role != Role.HOST:
 		return
 	var packet := {
@@ -352,16 +312,11 @@ func _on_room_lost_tick() -> void:
 		_known_rooms.erase(ip)
 		room_lost.emit(ip)
 
-# ----------------------------------------------------------------------
-# Public helpers
-# ----------------------------------------------------------------------
-
 func get_local_ip() -> String:
 	var addresses := IP.get_local_addresses()
 	for addr in addresses:
 		if addr.begins_with("192.168.") or addr.begins_with("10.") or addr.begins_with("172."):
 			return addr
-	# Fallback: try first non-loopback
 	for addr in addresses:
 		if not addr.begins_with("127."):
 			return addr
@@ -369,7 +324,5 @@ func get_local_ip() -> String:
 
 func is_host() -> bool: return role == Role.HOST
 func is_client() -> bool: return role == Role.CLIENT
-func has_role() -> bool: return role != Role.NONE  # renamed to avoid Object.is_connected collision
-
-func get_player_count() -> int:
-	return connected_peers.size()
+func has_role() -> bool: return role != Role.NONE
+func get_player_count() -> int: return connected_peers.size()

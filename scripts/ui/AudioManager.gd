@@ -9,8 +9,6 @@ var _lose_sound: AudioStream
 var _error_sound: AudioStream
 
 func _ready() -> void:
-	# Synthesize simple sounds so the app has feedback out of the box.
-	# Real recordings can be dropped in res://assets/sfx/ later.
 	_tap_sound = _make_tone(880.0, 0.05)
 	_win_sound = _make_arpeggio([523.25, 659.25, 783.99, 1046.5], 0.12)
 	_lose_sound = _make_arpeggio([392.0, 329.63, 261.63, 196.0], 0.18)
